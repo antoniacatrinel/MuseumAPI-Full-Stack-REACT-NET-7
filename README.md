@@ -10,7 +10,7 @@
 Create a REST API with CRUD functionalities that manages a Museum.
 
 You will need to:
-- Add at least `3` entities in total.
+- Add at least `3` entities to your API.
 - Implement CRUD for each of your entities.
 - Implement filtering on a numeric field for at least one entity. The filtering should return all entities with the numeric field higher than a given value.
 - A **1 to many** relation between two of your entities.
