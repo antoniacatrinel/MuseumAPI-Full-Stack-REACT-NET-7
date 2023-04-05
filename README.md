@@ -26,7 +26,7 @@ You will need to:
 
 ## 3
 - Add unit tests for the two non-CRUD functionalities from the previous assignments using a "mocking library". 
-- Deploy your project to a virtual machine. Your application should be usable by anyone with a link to it. You must use a remote server that you can SSH into. You are not allowed to use local VMs and you are not allowed to use your own home server.
+- Deploy your project to a virtual machine on [Microsoft Azure](https://azure.microsoft.com/en-us). Your application should be usable by anyone with a link to it. You must use a remote server that you can SSH into. You are not allowed to use local VMs and you are not allowed to use your own home server.
 - Add at least `3` validation rules. They can be spread across multiple entities.
 
 ## 4
@@ -34,6 +34,6 @@ You will need to:
 - Add Swagger to your REST API. It should be publicly accessible.
 - Implement at least one CRUD and one filter / statististical report on the frontend.
 - Users should be able to navigate the interface without manually editing the URL. The interface should also be intuitive and self-explanatory: try adding a UI Components Library like Material UI, Bulma, or even something like Bootstrap, Tailwind etc.
-- Deploy the frontend on https://www.netlify.com/.
+- Deploy the frontend on [Netlify](https://www.netlify.com/).
 
 
