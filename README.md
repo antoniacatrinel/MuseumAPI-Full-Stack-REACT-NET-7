@@ -34,6 +34,6 @@ You will need to:
 - Add Swagger to your REST API. It should be publicly accessible.
 - Implement at least one CRUD and one filter / statististical report on the frontend.
 - Users should be able to navigate the interface without manually editing the URL. The interface should also be intuitive and self-explanatory: try adding a UI Components Library like Material UI, Bulma, or even something like Bootstrap, Tailwind etc.
-- Deploy the frontend either on https://www.netlify.com/.
+- Deploy the frontend on https://www.netlify.com/.
 
 
