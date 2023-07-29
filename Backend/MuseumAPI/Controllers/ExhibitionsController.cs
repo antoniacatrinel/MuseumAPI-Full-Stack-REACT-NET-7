@@ -1,9 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Security.Cryptography;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Http;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MuseumAPI.Context;
@@ -17,12 +12,25 @@ namespace MuseumAPI.Controllers
     public class ExhibitionsController : ControllerBase
     {
         private readonly MuseumContext _context;
-        private readonly Validate _validator;
+        private readonly ExhibitionValidator _validator;
 
         public ExhibitionsController(MuseumContext context)
         {
             _context = context;
-            _validator = new Validate();
+            _validator = new ExhibitionValidator();
+        }
+
+        // GET: api/Exhibitions/count/10
+        [HttpGet("count/{pageSize}")]
+        [AllowAnonymous]
+        public async Task<int> GetTotalNumberOfPages(int pageSize = 10)
+        {
+            int total = await _context.Exhibitions.CountAsync();
+            int totalPages = total / pageSize;
+            if (total % pageSize > 0)
+                totalPages++;
+
+            return totalPages;
         }
 
         // GET: api/Exhibitions
@@ -37,9 +45,27 @@ namespace MuseumAPI.Controllers
             return await _context.Exhibitions.Select(x => ExhibitionToDTO(x)).ToListAsync();
         }
 
+        // GET: api/Exhibitions?page=0&pageSize=10
+        [HttpGet("page/{page}/{pageSize}")]
+        [AllowAnonymous]
+        public async Task<ActionResult<IEnumerable<Exhibition>>> GetExhibitionsPagination(int page = 0, int pageSize = 10)
+        {
+            if (_context.Exhibitions == null)
+                return NotFound();
+
+            return await _context.Exhibitions
+                .Include(e => e.Artist)
+                .Include(e => e.Museum)
+                .Include(e => e.User)
+                .Skip(page * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
+        }
+
         // GET: api/Exhibitions/5/5
-        [HttpGet("{mid}/{aid}")]
-        public async Task<ActionResult<Exhibition>> GetExhibition(long mid, long aid)
+        [HttpGet("{aid}/{mid}")]
+        [AllowAnonymous]
+        public async Task<ActionResult<Exhibition>> GetExhibition(long aid, long mid)
         {
             if (_context.Exhibitions == null)
             {
@@ -47,6 +73,7 @@ namespace MuseumAPI.Controllers
             }
 
             var exhibition = await _context.Exhibitions
+                .Include(e => e.User)
                 .Include(e => e.Artist)
                 .Include(e => e.Museum)
                 .FirstOrDefaultAsync(p => p.MuseumId == mid && p.ArtistId == aid);
@@ -60,31 +87,50 @@ namespace MuseumAPI.Controllers
         }
 
         // PUT: api/Exhibitions/5/5
-        [HttpPut("{mid}/{aid}")]
-        public async Task<IActionResult> PutExhibition(long mid, long aid, ExhibitionDTO exhibitionDTO)
+        [HttpPut("{aid}/{mid}")]
+        public async Task<IActionResult> PutExhibition(long aid, long mid, ExhibitionDTO exhibitionDTO)
         {
             if (mid != exhibitionDTO.MuseumId && aid != exhibitionDTO.ArtistId)
             {
                 return BadRequest();
             }
 
-            var exhibition = await _context.Exhibitions
-               .FirstOrDefaultAsync(p => p.MuseumId == mid && p.ArtistId == aid);
+            var exhibition = await _context.Exhibitions.FindAsync(aid, mid);
 
             if (exhibition == null)
             {
                 return NotFound();
             }
 
-            String validationErrors = _validator.validateExhibition(exhibitionDTO);
+            var extracted = UsersController.ExtractJWTToken(User);
+            if (extracted == null)
+                return Unauthorized("Invalid token.");
+
+            if (extracted.Item2 == AccessLevel.Regular && exhibition.UserId != extracted.Item1)
+                return Unauthorized("You can only update your own entities.");
+
+            String validationErrors = _validator.Validate(exhibitionDTO);
 
             if (validationErrors != String.Empty)
             {
                 return BadRequest("ERROR:\n" + validationErrors);
             }
 
+            // search for the artist and museum
+            var artist = await _context.Artists.FindAsync(aid);
+            if (artist == null)
+                return BadRequest();
+
+            var museum = await _context.Museums.FindAsync(mid);
+            if (museum == null)
+                return BadRequest();
+
             exhibition.ArtistId = exhibitionDTO.ArtistId;
+            exhibition.Artist = artist;
+
             exhibition.MuseumId = exhibitionDTO.MuseumId;
+            exhibition.Museum = museum;
+
             exhibition.StartDate = exhibitionDTO.StartDate;
             exhibition.EndDate = exhibitionDTO.EndDate;
 
@@ -92,7 +138,7 @@ namespace MuseumAPI.Controllers
             {
                 await _context.SaveChangesAsync();
             }
-            catch (DbUpdateConcurrencyException) when (!ExhibitionExists(mid, aid))
+            catch (DbUpdateConcurrencyException) when (!ExhibitionExists(aid, mid))
             {
                 if (!ExhibitionExists(mid, aid))
                 {
@@ -116,6 +162,17 @@ namespace MuseumAPI.Controllers
                 return Problem("Entity set 'MuseumContext.Exhibitions'  is null.");
             }
 
+            var extracted = UsersController.ExtractJWTToken(User);
+            if (extracted == null)
+                return Unauthorized("Invalid token.");
+
+            String validationErrors = _validator.Validate(exhibitionDTO);
+
+            if (validationErrors != String.Empty)
+            {
+                return BadRequest("ERROR:\n" + validationErrors);
+            }
+
             var museum = await _context.Museums.FindAsync(exhibitionDTO.MuseumId);
 
             if (museum == null)
@@ -130,13 +187,6 @@ namespace MuseumAPI.Controllers
                 return BadRequest();
             }
 
-            String validationErrors = _validator.validateExhibition(exhibitionDTO);
-
-            if (validationErrors != String.Empty)
-            {
-                return BadRequest("ERROR:\n" + validationErrors);
-            }
-
             var exhibition = new Exhibition
             {
                 ArtistId = exhibitionDTO.ArtistId,
@@ -146,18 +196,27 @@ namespace MuseumAPI.Controllers
                 Museum = museum,
 
                 StartDate = exhibitionDTO.StartDate,
-                EndDate = exhibitionDTO.EndDate
+                EndDate = exhibitionDTO.EndDate,
+
+                UserId = extracted.Item1
             };
 
             _context.Exhibitions.Add(exhibition);
-            await _context.SaveChangesAsync();
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateException) when (ExhibitionExists(exhibition.ArtistId, exhibition.MuseumId))
+            {
+                return Conflict();
+            }
 
-            return CreatedAtAction(nameof(GetExhibition), ExhibitionToDTO(exhibition));
+            return CreatedAtAction(nameof(GetExhibition), new { aid = artist.Id, mid = museum.Id }, ExhibitionToDTO(exhibition));
         }
 
         // DELETE: api/exhibitions/5/5
-        [HttpDelete("{mid}/{aid}")]
-        public async Task<IActionResult> DeleteExhibition(long mid, long aid)
+        [HttpDelete("{aid}/{mid}")]
+        public async Task<IActionResult> DeleteExhibition(long aid, long mid)
         {
             if (_context.Exhibitions == null)
             {
@@ -174,13 +233,20 @@ namespace MuseumAPI.Controllers
                 return NotFound();
             }
 
+            var extracted = UsersController.ExtractJWTToken(User);
+            if (extracted == null)
+                return Unauthorized("Invalid token.");
+
+            if (extracted.Item2 == AccessLevel.Regular && exhibition.UserId != extracted.Item1)
+                return Unauthorized("You can only delete your own entities.");
+
             _context.Exhibitions.Remove(exhibition);
             await _context.SaveChangesAsync();
 
             return NoContent();
         }
 
-        private bool ExhibitionExists(long mid, long aid)
+        private bool ExhibitionExists(long aid, long mid)
         {
             return (_context.Exhibitions?.Any(e => e.MuseumId == mid && e.ArtistId == aid)).GetValueOrDefault();
         }

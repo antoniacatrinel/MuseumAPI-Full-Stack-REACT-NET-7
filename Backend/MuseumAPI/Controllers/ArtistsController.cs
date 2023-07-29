@@ -1,10 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Http;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.CodeAnalysis.VisualBasic.Syntax;
 using Microsoft.EntityFrameworkCore;
 using MuseumAPI.Context;
 using MuseumAPI.Models;
@@ -17,12 +12,25 @@ namespace MuseumAPI.Controllers
     public class ArtistsController : ControllerBase
     {
         private readonly MuseumContext _context;
-        private readonly Validate _validator;
+        private readonly ArtistValidator _validator;
 
         public ArtistsController(MuseumContext context)
         {
             _context = context;
-            _validator = new Validate();
+            _validator = new ArtistValidator();
+        }
+
+        // GET: api/Artists/count/10
+        [HttpGet("count/{pageSize}")]
+        [AllowAnonymous]
+        public async Task<int> GetTotalNumberOfPages(int pageSize = 10)
+        {
+            int total = await _context.Artists.CountAsync();
+            int totalPages = total / pageSize;
+            if (total % pageSize > 0)
+                totalPages++;
+
+            return totalPages;
         }
 
         // GET: api/Artists
@@ -34,11 +42,30 @@ namespace MuseumAPI.Controllers
                 return NotFound();
             }
 
-            return await _context.Artists.Select(x => ArtistToDTO(x)).ToListAsync();
+            return await _context.Artists.Include(a => a.Paintings).Select(x => ArtistToDTO(x)).ToListAsync();
+        }
+
+        // GET: api/Artists?page=0&pageSize=10
+        [HttpGet("{page}/{pageSize}")]
+        [AllowAnonymous]
+        public async Task<ActionResult<IEnumerable<Artist>>> GetArtistsPagination(int page = 0, int pageSize = 10)
+        {
+            if (_context.Artists == null)
+                return NotFound();
+
+            return await _context.Artists
+                .Include(a => a.Paintings)
+                .Include(a => a.Museums)
+                .Include(a => a.Exhibitions)
+                .Include(a => a.User)
+                .Skip(page * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
         }
 
         // GET: api/Artists/5
         [HttpGet("{id}")]
+        [AllowAnonymous]
         public async Task<ActionResult<Artist>> GetArtist(long id)
         {
             if (_context.Artists == null)
@@ -47,8 +74,10 @@ namespace MuseumAPI.Controllers
             }
 
             var artist = await _context.Artists
+                .Include(a => a.User)
                 .Include(a => a.Paintings)
                 .Include(a => a.Museums)
+                .Include(a => a.Exhibitions)
                 .FirstOrDefaultAsync(p => p.Id == id);
 
             if (artist == null)
@@ -57,6 +86,23 @@ namespace MuseumAPI.Controllers
             }
 
             return artist;
+        }
+
+        [HttpGet("search")]
+        public async Task<ActionResult<IEnumerable<ArtistDTO>>> AutocompleteName(string query)
+        {
+
+            if (_context.Artists == null)
+                return NotFound();
+
+            if (query.Length < 3)
+                return NotFound();
+
+            return await _context.Artists
+                .Where(t => (t.FirstName != null  && t.FirstName.ToLower().Contains(query.ToLower())) || (t.LastName != null && t.LastName.ToLower().Contains(query.ToLower())))
+                .Select(x => ArtistToDTO(x))
+                .Take(10)
+                .ToListAsync();
         }
 
         // PUT: api/Artists/5
@@ -75,7 +121,14 @@ namespace MuseumAPI.Controllers
                 return NotFound();
             }
 
-            String validationErrors = _validator.validateArtist(artistDTO);
+            var extracted = UsersController.ExtractJWTToken(User);
+            if (extracted == null)
+                return Unauthorized("Invalid token.");
+
+            if (extracted.Item2 == AccessLevel.Regular && artist.UserId != extracted.Item1)
+                return Unauthorized("You can only update your own entities.");
+
+            String validationErrors = _validator.Validate(artistDTO);
 
             if (validationErrors != String.Empty)
             {
@@ -118,12 +171,17 @@ namespace MuseumAPI.Controllers
                 return Problem("Entity set 'MuseumContext.Artists' is null.");
             }
 
+            // Extract user id from the JWT token
+            var extracted = UsersController.ExtractJWTToken(User);
+            if (extracted == null)
+                return Unauthorized("Invalid token.");
+
             if (artistDTO == null)
             {
                 return Problem("The request body is null.");
             }
 
-            String validationErrors = _validator.validateArtist(artistDTO);
+            String validationErrors = _validator.Validate(artistDTO);
 
             if (validationErrors != String.Empty)
             {
@@ -138,13 +196,45 @@ namespace MuseumAPI.Controllers
                 BirthPlace = artistDTO.BirthPlace,
                 Education = artistDTO.Education,
                 Movement = artistDTO.Movement,
-                Paintings = null!
+                Paintings = null!,
+
+                UserId = extracted.Item1
             };
 
             _context.Artists.Add(artist);
             await _context.SaveChangesAsync();
 
             return CreatedAtAction(nameof(GetArtist), new { id = artistDTO.Id }, ArtistToDTO(artist));
+        }
+
+        // DELETE: api/Artists/5
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> DeleteArtist(long id)
+        {
+            if (_context.Artists == null)
+            {
+                return NotFound();
+            }
+
+            var artist = await _context.Artists.FindAsync(id);
+
+            if (artist == null)
+            {
+                return NotFound();
+            }
+
+            var extracted = UsersController.ExtractJWTToken(User);
+            if (extracted == null)
+                return Unauthorized("Invalid token.");
+
+            if (extracted.Item2 == AccessLevel.Regular && artist.UserId != extracted.Item1)
+                return Unauthorized("You can only delete your own entities.");
+
+
+            _context.Artists.Remove(artist);
+            await _context.SaveChangesAsync();
+
+            return NoContent();
         }
 
         // GET: Exhibition
@@ -278,7 +368,7 @@ namespace MuseumAPI.Controllers
             return NoContent();
         }
 
-        // POST: api/Artists/5/Paintings
+        // POST: api/Artists/5/PaintingsList
         [HttpPost("{id}/PaintingsList")]
         public async Task<ActionResult<Artist>> PostPaintingsToArtistFullObject(long id, List<PaintingDTO> paintings)
         {
@@ -299,6 +389,7 @@ namespace MuseumAPI.Controllers
                     Height = paintingDTO.Height,
                     Subject = paintingDTO.Subject,
                     Medium = paintingDTO.Medium,
+                    Description = paintingDTO.Description,
                     ArtistId = id,
                 };
 
@@ -339,6 +430,7 @@ namespace MuseumAPI.Controllers
 
         // FILTER: api/Artists/Filter
         [HttpGet("GetByPaintingAge")]
+        [AllowAnonymous]
         public async Task<List<ArtistsWithAveragePaintingAgeDTO>> GetArtistWithAveragePaintingAge()
         {
             //if (_context.Artists == null)
@@ -365,12 +457,13 @@ namespace MuseumAPI.Controllers
                                Movement = g.Key.Movement,
                                AveragePaintingAge = g.Average(painting => DateTime.Now.Year - painting.CreationYear)
                            }
-                     ).OrderBy(dto => dto.AveragePaintingAge).ToListAsync();
+                     ).Take(100).OrderBy(dto => dto.AveragePaintingAge).ToListAsync();
 
             return a;
         }
 
         [HttpGet("GetByPaintingHeight")]
+        [AllowAnonymous]
         public async Task<List<ArtistsWithAveragePaintingHeightDTO>> GetArtistWithAveragePaintingHeight()
         {
             //if (_context.Artists == null)
@@ -397,31 +490,24 @@ namespace MuseumAPI.Controllers
                                Movement = g.Key.Movement,
                                AveragePaintingHeight = g.Average(painting => painting.Height)
                            }
-                     ).OrderBy(dto => dto.AveragePaintingHeight).ToListAsync();
+                     ).Take(100).OrderBy(dto => dto.AveragePaintingHeight).ToListAsync();
 
             return a;
         }
 
-        // DELETE: api/Artists/5
-        [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteArtist(long id)
+        [HttpGet("count-paintings")]
+        public async Task<IEnumerable<int>> GetPaintingCountForArtist(int pageNumber = 0, int pageSize = 10)
         {
-            if (_context.Artists == null)
-            {
-                return NotFound();
-            }
+            var paintingsCount = await _context.Paintings
+                .GroupBy(a => a.ArtistId)
+                .Select(g => new { ArtistId = g.Key, paintingsCount = g.Count() })
+                .OrderBy(a => a.ArtistId)
+                .Skip(pageNumber * pageSize)
+                .Take(pageSize)
+                .Select(a => a.paintingsCount)
+                .ToListAsync();
 
-            var artist = await _context.Artists.FindAsync(id);
-
-            if (artist == null)
-            {
-                return NotFound();
-            }
-
-            _context.Artists.Remove(artist);
-            await _context.SaveChangesAsync();
-
-            return NoContent();
+            return paintingsCount;
         }
 
         private bool ArtistExists(long id)

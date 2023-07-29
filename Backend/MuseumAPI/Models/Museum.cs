@@ -11,8 +11,11 @@ namespace MuseumAPI.Models
         public string? Architect { get; set; }
         public string? Website { get; set; }
 
-        // Hiden from the API because it's not in the DTO
+        // Hidden from the API because it's not in the DTO
         public virtual ICollection<Artist> Artists { get; set; } = null!;
         public virtual ICollection<Exhibition> Exhibitions { get; set; } = null!;
+
+        public virtual long? UserId { get; set; }
+        public virtual User? User { get; set; } = null!;
     }
 }

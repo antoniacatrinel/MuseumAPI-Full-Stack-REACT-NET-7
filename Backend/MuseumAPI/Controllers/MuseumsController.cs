@@ -1,9 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Http;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MuseumAPI.Context;
@@ -17,12 +12,25 @@ namespace MuseumAPI.Controllers
     public class MuseumsController : ControllerBase
     {
         private readonly MuseumContext _context;
-        private readonly Validate _validator;
+        private readonly MuseumValidator _validator;
 
         public MuseumsController(MuseumContext context)
         {
             _context = context;
-            _validator = new Validate();
+            _validator = new MuseumValidator();
+        }
+
+        // GET: api/Stores/count/10
+        [HttpGet("count/{pageSize}")]
+        [AllowAnonymous]
+        public async Task<int> GetTotalNumberOfPages(int pageSize = 10)
+        {
+            int total = await _context.Museums.CountAsync();
+            int totalPages = total / pageSize;
+            if (total % pageSize > 0)
+                totalPages++;
+
+            return totalPages;
         }
 
         // GET: api/Museums
@@ -37,8 +45,26 @@ namespace MuseumAPI.Controllers
             return await _context.Museums.Select(x => MuseumToDTO(x)).ToListAsync();
         }
 
+        // GET: api/Museums?page=0&pageSize=10
+        [HttpGet("{page}/{pageSize}")]
+        [AllowAnonymous]
+        public async Task<ActionResult<IEnumerable<Museum>>> GetMuseumsPagination(int page = 0, int pageSize = 10)
+        {
+            if (_context.Museums == null)
+                return NotFound();
+
+            return await _context.Museums
+                .Include(m => m.Artists)
+                .Include(m => m.Exhibitions)
+                .Include(m => m.User)
+                .Skip(page * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
+        }
+
         // GET: api/Museums/5
         [HttpGet("{id}")]
+        [AllowAnonymous]
         public async Task<ActionResult<Museum>> GetMuseum(long id)
         {
             if (_context.Museums == null)
@@ -46,9 +72,10 @@ namespace MuseumAPI.Controllers
                 return NotFound();
             }
 
-            //var museum = await _context.Museums.FindAsync(id);
             var museum = await _context.Museums
+                .Include(a => a.User)
                 .Include(a => a.Artists)
+                .Include(a => a.Exhibitions)
                 .FirstOrDefaultAsync(p => p.Id == id);
 
             if (museum == null)
@@ -57,6 +84,22 @@ namespace MuseumAPI.Controllers
             }
 
             return museum;
+        }
+
+        [HttpGet("search")]
+        public async Task<ActionResult<IEnumerable<MuseumDTO>>> AutocompleteName(string query)
+        {
+
+            if (_context.Museums == null)
+                return NotFound();
+
+            if (query.Length < 3)
+                return NotFound();
+
+            return await _context.Museums.Where(t => t.Name != null && t.Name.ToLower().Contains(query.ToLower()))
+                .Select(x => MuseumToDTO(x))
+                .Take(10)
+                .ToListAsync();
         }
 
         // PUT: api/Museums/5
@@ -75,7 +118,14 @@ namespace MuseumAPI.Controllers
                 return NotFound();
             }
 
-            String validationErrors = _validator.validateMuseum(museumDTO);
+            var extracted = UsersController.ExtractJWTToken(User);
+            if (extracted == null)
+                return Unauthorized("Invalid token.");
+
+            if (extracted.Item2 == AccessLevel.Regular && museum.UserId != extracted.Item1)
+                return Unauthorized("You can only update your own entities.");
+
+            String validationErrors = _validator.Validate(museumDTO);
 
             if (validationErrors != String.Empty)
             {
@@ -116,12 +166,16 @@ namespace MuseumAPI.Controllers
                 return Problem("Entity set 'MuseumContext.Museums'  is null.");
             }
 
+            var extracted = UsersController.ExtractJWTToken(User);
+            if (extracted == null)
+                return Unauthorized("Invalid token.");
+
             if (museumDTO == null)
             {
                 return Problem("The request body is null.");
             }
 
-            String validationErrors = _validator.validateMuseum(museumDTO);
+            String validationErrors = _validator.Validate(museumDTO);
 
             if (validationErrors != String.Empty)
             {
@@ -135,6 +189,8 @@ namespace MuseumAPI.Controllers
                 FoundationDate = museumDTO.FoundationDate,
                 Architect = museumDTO.Architect,
                 Website = museumDTO.Website,
+
+                UserId = extracted.Item1
             };
 
             _context.Museums.Add(museum);
@@ -158,6 +214,13 @@ namespace MuseumAPI.Controllers
             {
                 return NotFound();
             }
+
+            var extracted = UsersController.ExtractJWTToken(User);
+            if (extracted == null)
+                return Unauthorized("Invalid token.");
+
+            if (extracted.Item2 == AccessLevel.Regular && museum.UserId != extracted.Item1)
+                return Unauthorized("You can only delete your own entities.");
 
             _context.Museums.Remove(museum);
             await _context.SaveChangesAsync();

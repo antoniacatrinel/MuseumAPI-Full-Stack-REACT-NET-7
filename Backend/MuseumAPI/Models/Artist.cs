@@ -10,10 +10,12 @@
         public string? Education { get; set; }
         public string? Movement { get; set; }
 
-        // Hiden from the API because it's not in the DTO
+        // Hidden from the API because it's not in the DTO
         public virtual ICollection<Painting> Paintings { get; set; } = null!;
-
         public virtual ICollection<Museum> Museums { get; set; } = null!;
         public virtual ICollection<Exhibition> Exhibitions { get; set; } = null!;
+
+        public virtual long? UserId { get; set; }
+        public virtual User? User { get; set; } = null!;
     }
 }
