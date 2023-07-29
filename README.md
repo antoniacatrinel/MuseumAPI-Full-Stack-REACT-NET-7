@@ -1,7 +1,7 @@
 # Museum API Full-Stack with React & .NET 7
 
 ###### ASP.NET Core 7.0.4
-###### Node.js 18.15.0, React with TypeScript, Functional Components and Vite
+###### Node.js 18.15.0, React + Vite
 
 ## 1
 
